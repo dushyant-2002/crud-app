@@ -16,7 +16,6 @@ module Server(runServer) where
 import           Control.Monad.IO.Class  (liftIO)
 import           Database.Persist
 import           Database.Persist.Postgresql
-
 import           GHC.Generics
 import           Servant
 import           Network.Wai.Handler.Warp
@@ -25,8 +24,10 @@ import           Data.Aeson
 import           Data.Text
 import           Data.Maybe 
 import           Models
-import Database.PostgreSQL.Simple (Connection)
-import Prelude
+import           Prelude
+import           Control.Monad (forM_)
+import           Database.Esqueleto ((^.))
+import qualified Data.List as L
 
 
 -- Define your API
@@ -38,16 +39,16 @@ type API =
   :<|> "logout" :> Delete '[PlainText] Text
   :<|> "movies" :> Get '[JSON] [Entity Movie]  -- get all Movies
   :<|> "movies" :> "add" :> ReqBody '[JSON] Movie :> Post '[JSON] (Entity Movie)  -- add new movie
-  :<|> "movie" :> "edit" :> Capture "movieId" MovieId :> ReqBody '[JSON] PartialMovie :> Patch '[JSON] (Entity Movie)  -- edit movie
+  :<|> "movie" :> "edit" :> Capture "movieId" MovieId :> ReqBody '[JSON] EditMovie :> Patch '[JSON] (Entity Movie)  -- edit movie
   :<|> "movie" :> "delete" :> Capture "movieId" MovieId :> Delete '[PlainText] Text  
   :<|> "movie" :> "like" :> Capture "movieId" MovieId :> Post '[PlainText] Text
   :<|> "movie" :> "dislike" :> Capture "movieId" MovieId :> Post '[PlainText] Text
  
 -- DataType for editing movies
-data PartialMovie = PartialMovie
-    { partialMovieName :: Maybe String
-    , partialMovieRating :: Maybe Int
-    , partialMovieGenre :: Maybe String
+data EditMovie = EditMovie
+    { editMovieName :: Maybe String
+    , editMovieRating :: Maybe Int
+    , editMovieGenre :: Maybe String
     } deriving (Generic, FromJSON)
 
 -- Define a type for user registration data
@@ -77,15 +78,15 @@ registerUserHandler pool userReg = do
     -- Check if there's an active user
     activeUser <- liftIO $ runSqlPool (selectFirst [] []) pool :: Handler (Maybe (Entity ActiveUser))
     case activeUser of
-        Just _ -> throwError err403 { errBody = "Registration is not allowed as there is an active user." }
+        Just _ -> throwError err403 { errBody = "You are already LoggedIn..." }
         Nothing -> do
             let newUser = DbUser
                     { dbUserUsername = regUsername userReg 
                     , dbUserPassword = regPassword userReg 
                     , dbUserFavouriteMovies = [] -- You may want to initialize this with an empty list or provide default values
                     }
-            -- Insert the new user into the database
-            _ <- liftIO $ runSqlPool (insert_ newUser) pool
+            -- Insert the new user into the databases
+            _ <- liftIO $ runSqlPool (insert_ newUser) pool 
             -- Add the user to the ActiveUser table
             _ <- liftIO $ runSqlPool (insert $ ActiveUser $ regUsername userReg) pool
             return "User registered successfully."
@@ -96,7 +97,7 @@ loginHandler pool (UserLogin username password) = do
     -- Check if ActiveUser table is not empty
     activeUser <- liftIO $ runSqlPool (selectFirst [] []) pool :: Handler (Maybe (Entity ActiveUser))
     case activeUser of
-        Just _ -> throwError err403 { errBody = "Login is not allowed as there is an active user." }
+        Just _ -> throwError err403 { errBody = "You are already LoggedIn..." }
         Nothing -> do
             -- Check if the user exists in the database
             maybeUser <- liftIO $ runSqlPool (selectFirst [DbUserUsername ==. username] []) pool
@@ -115,7 +116,7 @@ logoutHandler :: ConnectionPool -> Handler Text
 logoutHandler pool = do
     -- Delete all entries from the ActiveUser table
     _ <- liftIO $ runSqlPool (deleteWhere ([] :: [Filter ActiveUser])) pool
-    return "Logged out successfully. All active users removed."
+    return "Logged out successfully..."
 
 getMovies :: ConnectionPool -> Handler [Entity Movie]
 getMovies pool = liftIO $ runSqlPool (selectList [] []) pool
@@ -125,8 +126,8 @@ addMovie pool movie = do
     movieId <- liftIO $ runSqlPool (insert movie) pool
     return $ Entity movieId movie 
 
-editMovieHandler :: ConnectionPool -> MovieId -> PartialMovie -> Handler (Entity Movie)
-editMovieHandler pool movieId partialMovie = do
+editMovieHandler :: ConnectionPool -> MovieId -> EditMovie -> Handler (Entity Movie)
+editMovieHandler pool movieId editMovie = do
     -- Fetch the movie from the database
     maybeMovie <- liftIO $ runSqlPool (get movieId) pool
     case maybeMovie of
@@ -134,22 +135,42 @@ editMovieHandler pool movieId partialMovie = do
         Just oldMovie -> do
             -- Extract the Entity Movie from oldMovie
             let entityOldMovie = Entity movieId oldMovie
-            -- Update the movie properties with the new values from the partial movie
+            -- Update the movie properties with the new values from the edit movie
             let updatedMovie = oldMovie
-                    { movieName = fromMaybe (movieName oldMovie) (partialMovieName partialMovie)
-                    , movieRatng = fromMaybe (movieRatng oldMovie) (partialMovieRating partialMovie)
-                    , movieGenre = fromMaybe (movieGenre oldMovie) (partialMovieGenre partialMovie)
+                    { movieName = fromMaybe (movieName oldMovie) (editMovieName editMovie)
+                    , movieRatng = fromMaybe (movieRatng oldMovie) (editMovieRating editMovie)
+                    , movieGenre = fromMaybe (movieGenre oldMovie) (editMovieGenre editMovie)
                     }
             -- Save the updated movie back to the database
             _ <- liftIO $ runSqlPool (Database.Persist.Postgresql.replace movieId updatedMovie) pool
             -- Return the updated movie entity in the response
             return $ Entity movieId updatedMovie
 
+
+
+
+
 deleteMovieHandler :: ConnectionPool -> MovieId -> Handler Text
 deleteMovieHandler pool movieId = do
-    --delete movie
-    _ <- liftIO $ runSqlPool (delete movieId) pool
-    return "Movie Deleted Succesfully"
+    maybeMovie <- liftIO $ runSqlPool (get movieId) pool
+    case maybeMovie of
+        Nothing -> throwError err404 {errBody = "Movie not found"}
+        Just _ -> do
+            -- Delete the movie
+            _ <- liftIO $ runSqlPool (delete movieId) pool
+            -- Get all users
+            allUsers <- liftIO $ runSqlPool (selectList [] []) pool
+            -- Filter out users who have the movie ID in their favouriteMovies list
+            let usersWithMovie = Prelude.filter (\(Entity _ user) -> movieId `L.elem` dbUserFavouriteMovies user) allUsers
+            -- Remove the movie ID from each user's favouriteMovies list
+            forM_ usersWithMovie $ \(Entity userId user) -> do
+                let updatedFavouriteMovies = Prelude.filter (/= movieId) (dbUserFavouriteMovies user)
+                liftIO $ runSqlPool (update userId [DbUserFavouriteMovies =. updatedFavouriteMovies]) pool
+            return "Movie Deleted Successfully"
+
+
+
+
 
 likeMovieHandler :: ConnectionPool -> MovieId -> Handler Text
 likeMovieHandler pool movieId = do
@@ -161,7 +182,7 @@ likeMovieHandler pool movieId = do
             -- Find the DbUser associated with the active user
             maybeDbUser <- liftIO $ runSqlPool (selectFirst [DbUserUsername ==. activeUserUsername activeUser'] []) pool
             case maybeDbUser of
-                Nothing -> throwError err404 {errBody = "Active user not found in DbUser table!"}
+                Nothing -> throwError err404 {errBody = "Please Login First..."}
                 Just (Entity userId dbUser) -> do
                     -- Check if the movie is already present in the user's favouriteMovies list
                     if Prelude.elem movieId (dbUserFavouriteMovies dbUser)
@@ -183,7 +204,7 @@ dislikeMovieHandler pool movieId = do
             -- Find the DbUser associated with the active user
             maybeDbUser <- liftIO $ runSqlPool (selectFirst [DbUserUsername ==. activeUserUsername activeUser'] []) pool
             case maybeDbUser of
-                Nothing -> throwError err404 {errBody = "Active user not found in DbUser table!"}
+                Nothing -> throwError err404 {errBody = "Please Login First!"}
                 Just (Entity userId dbUser) -> do
                     -- Check if the movie is present in the user's favouriteMovies list
                     if Prelude.elem movieId (dbUserFavouriteMovies dbUser)
@@ -191,7 +212,7 @@ dislikeMovieHandler pool movieId = do
                             -- Remove the movie from the user's favouriteMovies list
                             let updatedFavouriteMovies = Prelude.filter (/= movieId) (dbUserFavouriteMovies dbUser)
                             _ <- liftIO $ runSqlPool (update userId [DbUserFavouriteMovies =. updatedFavouriteMovies]) pool
-                            return "Movie Unliked Successfully!"
+                            return "Movie Disliked Successfully!"
                         else throwError err400 {errBody = "You haven't liked this movie!"}
 
 
@@ -219,7 +240,7 @@ runServer :: IO ()
 runServer = do
     -- Set up a connection pool to your PostgreSQL database
     pool <- runStderrLoggingT $ createPostgresqlPool
-              "dbname=mydatabase user=dushyant.singh host=localhost port=5432"
+              "dbname=mydatabase user=dushyantsingh host=localhost port=5432"
               10
     -- Delete all entries from the ActiveUser table
     _ <- runSqlPool (deleteWhere ([] :: [Filter ActiveUser])) pool
