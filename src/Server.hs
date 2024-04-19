@@ -10,6 +10,7 @@
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DeriveAnyClass             #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Server(runServer) where
 
@@ -24,10 +25,12 @@ import           Data.Aeson
 import           Data.Text
 import           Data.Maybe 
 import           Models
-import           Prelude
+import           Prelude hiding (exp)
 import           Control.Monad (forM_)
 import           Database.Esqueleto ((^.))
 import qualified Data.List as L
+
+
 
 
 -- Define your API
@@ -90,6 +93,9 @@ registerUserHandler pool userReg = do
             -- Add the user to the ActiveUser table
             _ <- liftIO $ runSqlPool (insert $ ActiveUser $ regUsername userReg) pool
             return "User registered successfully."
+
+
+
 
 -- Define the handler for user login
 loginHandler :: ConnectionPool -> UserLogin -> Handler Text

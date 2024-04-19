@@ -38,14 +38,19 @@ library
   build-depends:
       aeson
     , base >=4.7 && <5
+    , bytestring
     , esqueleto
+    , jwt
     , monad-logger
     , persistent
     , persistent-postgresql
     , persistent-template
     , postgresql-simple
+    , servant-auth-server
     , servant-server
     , text
+    , time
+    , uuid
     , wai
     , warp
   default-language: Haskell2010
@@ -62,15 +67,20 @@ executable crudApp-exe
   build-depends:
       aeson
     , base
+    , bytestring
     , crudApp
     , esqueleto
+    , jwt
     , monad-logger
     , persistent
     , persistent-postgresql
     , persistent-template
     , postgresql-simple
+    , servant-auth-server
     , servant-server
     , text
+    , time
+    , uuid
     , wai
     , warp
   default-language: Haskell2010
@@ -88,18 +98,23 @@ test-suite crudApp-test
   build-depends:
       aeson
     , base
+    , bytestring
     , crudApp
     , esqueleto
     , hspec
     , hspec-wai
     , hspec-wai-json
+    , jwt
     , monad-logger
     , persistent
     , persistent-postgresql
     , persistent-template
     , postgresql-simple
+    , servant-auth-server
     , servant-server
     , text
+    , time
+    , uuid
     , wai
     , warp
   default-language: Haskell2010

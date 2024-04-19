@@ -32,6 +32,12 @@ dependencies:
 - persistent-template
 - monad-logger
 - text
+- time
+- jwt
+- servant-auth-server
+- bytestring
+- uuid
+
 
 
 ghc-options:
